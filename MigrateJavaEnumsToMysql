@@ -1,0 +1,105 @@
+package db.migration;
+
+import com.google.common.base.CaseFormat;
+import com.shs.crm.dao.annotations.DaoEnum;
+import org.apache.commons.lang3.StringUtils;
+import org.flywaydb.core.api.migration.BaseJavaMigration;
+import org.flywaydb.core.api.migration.Context;
+import org.reflections.Reflections;
+import org.reflections.scanners.FieldAnnotationsScanner;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.persistence.CollectionTable;
+import javax.persistence.Column;
+import javax.persistence.Table;
+import java.lang.reflect.Field;
+import java.sql.PreparedStatement;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public class R__001_create_enum_fields extends BaseJavaMigration {
+    private final Logger log = LoggerFactory.getLogger(R__001_create_enum_fields.class);
+    public void migrate(Context context) throws Exception {
+        log.info("Executing repeatable migration for syncing enums with database schema");
+        var ref = new Reflections("com.shs.crm.dao.entity",new FieldAnnotationsScanner());
+        Set<Field> daoEnumFields = ref.getFieldsAnnotatedWith(DaoEnum.class);
+            for (Field f : daoEnumFields) {
+                DaoEnum daoEnumAnnotation = f.getAnnotation(DaoEnum.class);
+                Class<?> cl = f.getDeclaringClass();
+                Table table = cl.getAnnotation(Table.class);
+                String tableName = table == null || StringUtils.isEmpty(table.name()) ? CaseFormat.UPPER_CAMEL.to(CaseFormat.LOWER_UNDERSCORE,cl.getSimpleName()) : table.name();
+                if(f.getType().equals(Set.class) || f.getType().equals(List.class)){
+                    CollectionTable collectionTable = f.getAnnotation(CollectionTable.class);
+                    if(!StringUtils.isEmpty(collectionTable.name())){
+                        //override table name by collection table name if it's collection
+                        tableName = collectionTable.name();
+                    }
+                }
+                Column collumnAnnotation = f.getAnnotation(Column.class);
+                String tableFieldName = collumnAnnotation == null || StringUtils.isEmpty(collumnAnnotation.name()) ? CaseFormat.UPPER_CAMEL.to(CaseFormat.LOWER_UNDERSCORE, f.getName())
+                    : collumnAnnotation.name();
+
+                Class<?> fieldType = daoEnumAnnotation.enumClass().equals(void.class) ? f.getType() : daoEnumAnnotation.enumClass();
+                List<String> enumItems =Arrays.asList(fieldType.getEnumConstants()).stream()
+                        .map(item -> ((Enum)item).name()).collect(Collectors.toList());
+
+                String enumItemsStr=enumItems.stream()
+                        .map(item ->  "'"+item+"'")
+                        .collect(Collectors.joining(","));
+
+                log.info(String.format("Table name - %s fields:%s",tableName,enumItemsStr));
+                String script = String.format("ALTER TABLE %s\n" +
+                        "  CHANGE COLUMN %s %s ENUM(%s) DEFAULT NULL;",tableName,tableFieldName,tableFieldName,enumItemsStr);
+                log.info("Executing migration:"+script);
+                try (PreparedStatement select = context.getConnection().prepareStatement(script)) {
+                    select.executeUpdate();
+                }
+            }
+    }
+    public Integer getChecksum() {
+        var ref = new Reflections("com.shs.crm.dao.entity",new FieldAnnotationsScanner());
+        Set<Field> daoEnumFields = ref.getFieldsAnnotatedWith(DaoEnum.class);
+        StringBuilder checksumStr = new StringBuilder();
+        for (Field f : daoEnumFields) {
+            DaoEnum daoEnumAnnotation = f.getAnnotation(DaoEnum.class);
+            Class<?> cl = f.getDeclaringClass();
+            Table table = cl.getAnnotation(Table.class);
+            String originalTableName = table == null || StringUtils.isEmpty(table.name()) ? cl.getSimpleName() : table.name();
+
+            if(f.getType().equals(Set.class) || f.getType().equals(List.class)){
+                CollectionTable collectionTable = f.getAnnotation(CollectionTable.class);
+                if(!StringUtils.isEmpty(collectionTable.name())){
+                    //override table name by collection table name if it's collection
+                    originalTableName = collectionTable.name();
+                }
+            }
+            String tableName = CaseFormat.UPPER_CAMEL.to(CaseFormat.LOWER_UNDERSCORE, originalTableName);
+            Column collumnAnnotation = f.getAnnotation(Column.class);
+            String tableFieldName = collumnAnnotation == null || StringUtils.isEmpty(collumnAnnotation.name()) ? CaseFormat.UPPER_CAMEL.to(CaseFormat.LOWER_UNDERSCORE, f.getName())
+                    : collumnAnnotation.name();
+
+            Class<?> fieldType = daoEnumAnnotation.enumClass().equals(void.class) ? f.getType() : daoEnumAnnotation.enumClass();
+            List<String> enumItems =Arrays.asList(fieldType.getEnumConstants()).stream()
+                    .map(item -> ((Enum)item).name()).collect(Collectors.toList());
+
+            String enumItemsStr=enumItems.stream()
+                    .map(item ->  "'"+item+"'")
+                    .collect(Collectors.joining(","));
+
+            checksumStr.append(tableName);
+            checksumStr.append(enumItemsStr);
+        }
+        return checksumStr.toString().hashCode();
+    }
+}
+
+//Interface
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.FIELD})
+@Documented
+public @interface DaoEnum {
+    Class<?> enumClass() default void.class;
+}
